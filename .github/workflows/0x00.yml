@@ -1,4 +1,4 @@
-name: Direct DL
+name: Direct DL → Release
 
 on:
   workflow_dispatch:
@@ -20,12 +20,12 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout (minimal)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Install aria2
+      - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y aria2 zip
@@ -36,8 +36,8 @@ jobs:
           RAW_URLS="${{ github.event.inputs.url }}"
           FORMATTED_URLS=$(echo "$RAW_URLS" | tr ',' ' ' | tr '\n' ' ')
           
-          rm -rf tmp_downloads
-          mkdir -p tmp_downloads dl
+          rm -rf tmp_downloads upload
+          mkdir -p tmp_downloads upload
           
           for URL in $FORMATTED_URLS; do
             [ -z "$URL" ] && continue
@@ -50,63 +50,53 @@ jobs:
               "$URL"
           done
 
-      - name: Zip & Split (Optional)
+      - name: Prepare Files (zip only if needed)
         shell: bash
         run: |
           PASS="${{ github.event.inputs.password }}"
+          LIMIT=$((2 * 1024 * 1024 * 1024)) # 2GB
 
           for FILE in tmp_downloads/*; do
             [ -f "$FILE" ] || continue
             SIZE=$(stat -c%s "$FILE")
-            LIMIT=$((95 * 1024 * 1024))
             BASENAME=$(basename "$FILE")
             
-            rm -f "dl/${BASENAME}.zip" "dl/${BASENAME}.z"*
+            if [ "$SIZE" -gt "$LIMIT" ]; then
+              echo "File >2GB → Splitting: $BASENAME"
+              zip -s 2g "upload/${BASENAME}.zip" -j "$FILE"
             
-            if [ -n "$PASS" ] || [ "$SIZE" -gt "$LIMIT" ]; then
-              echo "Zipping: $BASENAME"
-              
-              PASS_ARG=""
-              [ -n "$PASS" ] && PASS_ARG="-P $PASS"
-              
-              zip $PASS_ARG -s 95m "dl/${BASENAME}.zip" -j "$FILE"
-              
-              for ZPART in "dl/${BASENAME}".zip "dl/${BASENAME}".z*; do
-                [ -f "$ZPART" ] && basename "$ZPART" >> new_files.txt
-              done
+            elif [ -n "$PASS" ]; then
+              echo "Zipping with password: $BASENAME"
+              zip -P "$PASS" "upload/${BASENAME}.zip" -j "$FILE"
+            
             else
-              cp "$FILE" "dl/$BASENAME"
-              echo "$BASENAME" >> new_files.txt
+              echo "Keeping original: $BASENAME"
+              cp "$FILE" "upload/$BASENAME"
             fi
           done
 
           rm -rf tmp_downloads
 
-      - name: Generate Links.md
-        shell: bash
+      - name: Generate Release Info
+        id: meta
         run: |
-          [ ! -f new_files.txt ] && exit 0
-          
-          REPO="${{ github.repository }}"
-          BRANCH="${GITHUB_REF_NAME}"
-          
-          echo "## Direct Links" > Links.md
-          echo "" >> Links.md
-          
-          while IFS= read -r FNAME; do
-            ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote(input()))" <<< "$FNAME")
-            URL="https://github.com/$REPO/raw/$BRANCH/dl/$ENCODED"
-            
-            echo "- [$FNAME]($URL)" >> Links.md
-          done < new_files.txt
-          
-          rm -f new_files.txt
+          TAG="run-$(date +%Y%m%d-%H%M%S)"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-      - name: Push Changes
-        run: |
-          git config user.name "DL Bot"
-          git config user.email "bot@users.noreply.github.com"
-          
-          git add dl/ Links.md
-          git commit -m "Add direct downloads [skip ci]" || echo "Nothing to commit"
-          git push
+          echo "## 📦 Download Links" > body.md
+          echo "" >> body.md
+
+          for FILE in upload/*; do
+            NAME=$(basename "$FILE")
+            echo "- $NAME" >> body.md
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "Download ${{ steps.meta.outputs.tag }}"
+          body_path: body.md
+          files: upload/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
