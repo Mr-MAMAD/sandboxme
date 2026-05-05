@@ -1,10 +1,10 @@
-name: PH Downloader (Ultimate Stable)
+name: PH Downloader (Final Stable)
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Video URLs (max 30)'
+        description: 'Video URLs (comma, space, or newline separated)'
         required: true
         type: string
       quality:
@@ -23,7 +23,8 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install yt-dlp
         run: |
@@ -33,33 +34,17 @@ jobs:
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
 
-          # آپدیت برای جلوگیری از ارور extractor
-          yt-dlp -U || true
-
-      - name: Setup Cookies (optional)
-        env:
-          COOKIES: ${{ secrets.PH_COOKIES }}
-        run: |
-          if [ -n "$COOKIES" ]; then
-            echo "$COOKIES" > cookies.txt
-          else
-            touch cookies.txt
-          fi
-
-      - name: Prepare URLs (max 30)
+      - name: Prepare URL List
         run: |
           RAW="${{ github.event.inputs.url }}"
-
+          
           echo "$RAW" | tr ', ' '\n\n' | tr -s '\n' > urls.txt
           sed -i '/^\s*$/d' urls.txt
 
-          head -n 30 urls.txt > urls2.txt
-          mv urls2.txt urls.txt
-
-          echo "Final URLs:"
+          echo "URLs:"
           cat urls.txt
 
-      - name: Download (Queue + Retry + AntiBlock)
+      - name: Download Videos (Parallel + Retry)
         run: |
           QUALITY="${{ github.event.inputs.quality }}"
           mkdir -p output
@@ -74,39 +59,22 @@ jobs:
 
           export FORMAT
 
-          TOTAL=$(wc -l < urls.txt)
-          echo 0 > progress.txt
-
           download() {
             URL="$1"
-
-            COUNT=$(($(cat progress.txt)+1))
-            echo $COUNT > progress.txt
-
-            echo "[$COUNT/$TOTAL] $URL"
-
             for i in 1 2 3; do
-              yt-dlp \
-                --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
-                --add-header "Referer:https://www.pornhub.com/" \
-                --retries 3 \
-                --fragment-retries 3 \
-                $FORMAT \
+              echo "Attempt $i: $URL"
+              yt-dlp $FORMAT \
                 --merge-output-format mp4 \
-                -o "output/%(title, id)s.%(ext)s" \
+                -o "output/%(title)s.%(ext)s" \
                 "$URL" && return 0
-
-              echo "Retry $i failed..."
-              sleep 3
+              sleep 2
             done
-
             echo "$URL" >> failed.txt
           }
 
           export -f download
-          export TOTAL
 
-          cat urls.txt | xargs -P 3 -n 1 -I {} bash -c 'download "$@"' _ {}
+          cat urls.txt | xargs -P 3 -I {} bash -c 'download "$@"' _ {}
 
       - name: Check output
         id: check
@@ -129,7 +97,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Show Failed
+      - name: Show Failed URLs
         if: always()
         run: |
           if [ -f failed.txt ]; then
@@ -140,13 +108,8 @@ jobs:
           fi
 
       - name: Summary
-        if: always()
+        if: steps.check.outputs.count != '0'
         run: |
-          echo "## 📊 Download Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- Total: $(wc -l < urls.txt)" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -f failed.txt ]; then
-            echo "- Failed: $(wc -l < failed.txt)" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- Failed: 0" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "## 📦 Download Ready" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Release created successfully." >> $GITHUB_STEP_SUMMARY
