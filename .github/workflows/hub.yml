@@ -1,10 +1,10 @@
-name: PH Downloader (Queue + Progress)
+name: PH Downloader (Ultimate Stable)
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Video URLs (comma, space, or newline separated, max 30)'
+        description: 'Video URLs (max 30)'
         required: true
         type: string
       quality:
@@ -29,8 +29,22 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
+          
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
+
+          # آپدیت برای جلوگیری از ارور extractor
+          yt-dlp -U || true
+
+      - name: Setup Cookies (optional)
+        env:
+          COOKIES: ${{ secrets.PH_COOKIES }}
+        run: |
+          if [ -n "$COOKIES" ]; then
+            echo "$COOKIES" > cookies.txt
+          else
+            touch cookies.txt
+          fi
 
       - name: Prepare URLs (max 30)
         run: |
@@ -45,10 +59,10 @@ jobs:
           echo "Final URLs:"
           cat urls.txt
 
-      - name: Download (Queue + Progress)
+      - name: Download (Queue + Retry + AntiBlock)
         run: |
           QUALITY="${{ github.event.inputs.quality }}"
-          mkdir -p output logs
+          mkdir -p output
 
           if [ "$QUALITY" = "720p" ]; then
             FORMAT="-f bestvideo[height<=720]+bestaudio/best[height<=720]"
@@ -61,28 +75,30 @@ jobs:
           export FORMAT
 
           TOTAL=$(wc -l < urls.txt)
-          echo "Total URLs: $TOTAL"
-
-          # فایل شمارنده
           echo 0 > progress.txt
 
           download() {
             URL="$1"
 
-            # افزایش شمارنده
             COUNT=$(($(cat progress.txt)+1))
             echo $COUNT > progress.txt
 
-            echo "[$COUNT/$TOTAL] Downloading: $URL"
+            echo "[$COUNT/$TOTAL] $URL"
 
             for i in 1 2 3; do
-              yt-dlp $FORMAT \
+              yt-dlp \
+                --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+                --add-header "Referer:https://www.pornhub.com/" \
+                --retries 3 \
+                --fragment-retries 3 \
+                --cookies cookies.txt \
+                $FORMAT \
                 --merge-output-format mp4 \
-                -o "output/%(title)s.%(ext)s" \
+                -o "output/%(title, id)s.%(ext)s" \
                 "$URL" && return 0
-              
+
               echo "Retry $i failed..."
-              sleep 2
+              sleep 3
             done
 
             echo "$URL" >> failed.txt
@@ -128,7 +144,6 @@ jobs:
         if: always()
         run: |
           echo "## 📊 Download Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Total: $(wc -l < urls.txt)" >> $GITHUB_STEP_SUMMARY
           
           if [ -f failed.txt ]; then
