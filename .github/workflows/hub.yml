@@ -1,10 +1,10 @@
-name: PH Downloader (Multi URL)
+name: PH Downloader (Stable Multi)
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Video URLs (separate with space, comma, or newline)'
+        description: 'Video URLs (separate with comma, space, or newline)'
         required: true
         type: string
       quality:
@@ -34,18 +34,27 @@ jobs:
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
 
-      - name: Download Videos (Parallel)
-        shell: bash
+      - name: Prepare URL List
+        id: prep
         run: |
           RAW_URLS="${{ github.event.inputs.url }}"
+
+          # تبدیل همه جداکننده‌ها به newline
+          echo "$RAW_URLS" | tr ', ' '\n\n' | tr -s '\n' > urls.txt
+
+          # حذف خطوط خالی
+          sed -i '/^\s*$/d' urls.txt
+
+          echo "Processed URLs:"
+          cat urls.txt
+
+      - name: Download Videos (Parallel + Retry)
+        shell: bash
+        run: |
           QUALITY="${{ github.event.inputs.quality }}"
 
           mkdir -p output
 
-          # تبدیل ورودی به لیست
-          FORMATTED_URLS=$(echo "$FORMATTED_URLS" | sed '/^\s*$/d')
-
-          # انتخاب کیفیت
           if [ "$QUALITY" = "720p" ]; then
             FORMAT="-f bestvideo[height<=720]+bestaudio/best[height<=720]"
           elif [ "$QUALITY" = "480p" ]; then
@@ -56,19 +65,41 @@ jobs:
 
           export FORMAT
 
-          # اجرای همزمان (3 دانلود همزمان)
-          echo "$FORMATTED_URLS" | xargs -P 3 -I {} bash -c '
-  echo "Downloading: {}"
-  yt-dlp $FORMAT \
-    --merge-output-format mp4 \
-    -o "output/%(title)s.%(ext)s" \
-    "{}"
-'
+          # تابع دانلود با retry
+          download_with_retry () {
+            URL="$1"
+            for i in 1 2 3; do
+              echo "Attempt $i: $URL"
+              
+              yt-dlp $FORMAT \
+                --merge-output-format mp4 \
+                -o "output/%(title)s.%(ext)s" \
+                "$URL" && return 0
+              
+              echo "Retrying..."
+              sleep 2
+            done
+
+            echo "FAILED: $URL" >> failed.txt
+          }
+
+          export -f download_with_retry
+
+          cat urls.txt | xargs -P 3 -I {} bash -c 'download_with_retry "$@"' _ {}
+
+      - name: Show Failed URLs (if any)
+        run: |
+          if [ -f failed.txt ]; then
+            echo "Some downloads failed:"
+            cat failed.txt
+          else
+            echo "All downloads successful ✅"
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "run-$(date +%s)"
+          tag_name: "run-$(date +%Y%m%d-%H%M%S)"
           name: "Downloaded Videos"
           files: output/*
         env:
