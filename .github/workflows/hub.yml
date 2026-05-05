@@ -43,7 +43,7 @@ jobs:
           mkdir -p output
 
           # تبدیل ورودی به لیست
-          FORMATTED_URLS=$(echo "$RAW_URLS" | tr ',' ' ' | tr '\n' ' ')
+          FORMATTED_URLS=$(echo "$FORMATTED_URLS" | sed '/^\s*$/d')
 
           # انتخاب کیفیت
           if [ "$QUALITY" = "720p" ]; then
@@ -57,13 +57,13 @@ jobs:
           export FORMAT
 
           # اجرای همزمان (3 دانلود همزمان)
-          echo "$FORMATTED_URLS" | xargs -n 1 -P 3 -I {} bash -c '
-            echo "Downloading: {}"
-            yt-dlp $FORMAT \
-              --merge-output-format mp4 \
-              -o "output/%(title)s.%(ext)s" \
-              "{}"
-          '
+          echo "$FORMATTED_URLS" | xargs -P 3 -I {} bash -c '
+  echo "Downloading: {}"
+  yt-dlp $FORMAT \
+    --merge-output-format mp4 \
+    -o "output/%(title)s.%(ext)s" \
+    "{}"
+'
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
