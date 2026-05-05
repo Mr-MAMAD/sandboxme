@@ -1,10 +1,10 @@
-name: PH Downloader (Final Stable)
+name: PH Downloader (Queue + Progress)
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Video URLs (comma, space, or newline separated)'
+        description: 'Video URLs (comma, space, or newline separated, max 30)'
         required: true
         type: string
       quality:
@@ -23,31 +23,32 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Install yt-dlp
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
-          
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
 
-      - name: Prepare URL List
+      - name: Prepare URLs (max 30)
         run: |
           RAW="${{ github.event.inputs.url }}"
-          
+
           echo "$RAW" | tr ', ' '\n\n' | tr -s '\n' > urls.txt
           sed -i '/^\s*$/d' urls.txt
 
-          echo "URLs:"
+          head -n 30 urls.txt > urls2.txt
+          mv urls2.txt urls.txt
+
+          echo "Final URLs:"
           cat urls.txt
 
-      - name: Download Videos (Parallel + Retry)
+      - name: Download (Queue + Progress)
         run: |
           QUALITY="${{ github.event.inputs.quality }}"
-          mkdir -p output
+          mkdir -p output logs
 
           if [ "$QUALITY" = "720p" ]; then
             FORMAT="-f bestvideo[height<=720]+bestaudio/best[height<=720]"
@@ -59,22 +60,38 @@ jobs:
 
           export FORMAT
 
+          TOTAL=$(wc -l < urls.txt)
+          echo "Total URLs: $TOTAL"
+
+          # فایل شمارنده
+          echo 0 > progress.txt
+
           download() {
             URL="$1"
+
+            # افزایش شمارنده
+            COUNT=$(($(cat progress.txt)+1))
+            echo $COUNT > progress.txt
+
+            echo "[$COUNT/$TOTAL] Downloading: $URL"
+
             for i in 1 2 3; do
-              echo "Attempt $i: $URL"
               yt-dlp $FORMAT \
                 --merge-output-format mp4 \
                 -o "output/%(title)s.%(ext)s" \
                 "$URL" && return 0
+              
+              echo "Retry $i failed..."
               sleep 2
             done
+
             echo "$URL" >> failed.txt
           }
 
           export -f download
+          export TOTAL
 
-          cat urls.txt | xargs -P 3 -I {} bash -c 'download "$@"' _ {}
+          cat urls.txt | xargs -P 3 -n 1 -I {} bash -c 'download "$@"' _ {}
 
       - name: Check output
         id: check
@@ -97,7 +114,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Show Failed URLs
+      - name: Show Failed
         if: always()
         run: |
           if [ -f failed.txt ]; then
@@ -108,8 +125,14 @@ jobs:
           fi
 
       - name: Summary
-        if: steps.check.outputs.count != '0'
+        if: always()
         run: |
-          echo "## 📦 Download Ready" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Download Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Release created successfully." >> $GITHUB_STEP_SUMMARY
+          echo "- Total: $(wc -l < urls.txt)" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f failed.txt ]; then
+            echo "- Failed: $(wc -l < failed.txt)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- Failed: 0" >> $GITHUB_STEP_SUMMARY
+          fi
