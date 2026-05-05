@@ -1,0 +1,75 @@
+name: PH Downloader (Multi URL)
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Video URLs (separate with space, comma, or newline)'
+        required: true
+        type: string
+      quality:
+        description: 'Quality'
+        required: true
+        type: choice
+        options:
+          - 'best'
+          - '720p'
+          - '480p'
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yt-dlp
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+
+      - name: Download Videos (Parallel)
+        shell: bash
+        run: |
+          RAW_URLS="${{ github.event.inputs.url }}"
+          QUALITY="${{ github.event.inputs.quality }}"
+
+          mkdir -p output
+
+          # تبدیل ورودی به لیست
+          FORMATTED_URLS=$(echo "$RAW_URLS" | tr ',' ' ' | tr '\n' ' ')
+
+          # انتخاب کیفیت
+          if [ "$QUALITY" = "720p" ]; then
+            FORMAT="-f bestvideo[height<=720]+bestaudio/best[height<=720]"
+          elif [ "$QUALITY" = "480p" ]; then
+            FORMAT="-f bestvideo[height<=480]+bestaudio/best[height<=480]"
+          else
+            FORMAT="-f best"
+          fi
+
+          export FORMAT
+
+          # اجرای همزمان (3 دانلود همزمان)
+          echo "$FORMATTED_URLS" | xargs -n 1 -P 3 -I {} bash -c '
+            echo "Downloading: {}"
+            yt-dlp $FORMAT \
+              --merge-output-format mp4 \
+              -o "output/%(title)s.%(ext)s" \
+              "{}"
+          '
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "run-$(date +%s)"
+          name: "Downloaded Videos"
+          files: output/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
