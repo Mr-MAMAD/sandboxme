@@ -91,7 +91,6 @@ jobs:
                 --add-header "Referer:https://www.pornhub.com/" \
                 --retries 3 \
                 --fragment-retries 3 \
-                --cookies cookies.txt \
                 $FORMAT \
                 --merge-output-format mp4 \
                 -o "output/%(title, id)s.%(ext)s" \
