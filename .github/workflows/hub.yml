@@ -1,10 +1,10 @@
-name: PH Downloader (Stable Multi)
+name: PH Downloader (Final Stable)
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Video URLs (separate with comma, space, or newline)'
+        description: 'Video URLs (comma, space, or newline separated)'
         required: true
         type: string
       quality:
@@ -35,24 +35,18 @@ jobs:
           sudo chmod a+rx /usr/local/bin/yt-dlp
 
       - name: Prepare URL List
-        id: prep
         run: |
-          RAW_URLS="${{ github.event.inputs.url }}"
-
-          # تبدیل همه جداکننده‌ها به newline
-          echo "$RAW_URLS" | tr ', ' '\n\n' | tr -s '\n' > urls.txt
-
-          # حذف خطوط خالی
+          RAW="${{ github.event.inputs.url }}"
+          
+          echo "$RAW" | tr ', ' '\n\n' | tr -s '\n' > urls.txt
           sed -i '/^\s*$/d' urls.txt
 
-          echo "Processed URLs:"
+          echo "URLs:"
           cat urls.txt
 
       - name: Download Videos (Parallel + Retry)
-        shell: bash
         run: |
           QUALITY="${{ github.event.inputs.quality }}"
-
           mkdir -p output
 
           if [ "$QUALITY" = "720p" ]; then
@@ -65,42 +59,57 @@ jobs:
 
           export FORMAT
 
-          # تابع دانلود با retry
-          download_with_retry () {
+          download() {
             URL="$1"
             for i in 1 2 3; do
               echo "Attempt $i: $URL"
-              
               yt-dlp $FORMAT \
                 --merge-output-format mp4 \
                 -o "output/%(title)s.%(ext)s" \
                 "$URL" && return 0
-              
-              echo "Retrying..."
               sleep 2
             done
-
-            echo "FAILED: $URL" >> failed.txt
+            echo "$URL" >> failed.txt
           }
 
-          export -f download_with_retry
+          export -f download
 
-          cat urls.txt | xargs -P 3 -I {} bash -c 'download_with_retry "$@"' _ {}
+          cat urls.txt | xargs -P 3 -I {} bash -c 'download "$@"' _ {}
 
-      - name: Show Failed URLs (if any)
+      - name: Check output
+        id: check
         run: |
-          if [ -f failed.txt ]; then
-            echo "Some downloads failed:"
-            cat failed.txt
-          else
-            echo "All downloads successful ✅"
-          fi
+          COUNT=$(ls -1 output 2>/dev/null | wc -l)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+
+      - name: Generate Tag
+        if: steps.check.outputs.count != '0'
+        id: tag
+        run: echo "tag=run-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
 
       - name: Create Release
+        if: steps.check.outputs.count != '0'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "run-$(date +%Y%m%d-%H%M%S)"
-          name: "Downloaded Videos"
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Downloaded Videos ${{ steps.tag.outputs.tag }}"
           files: output/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show Failed URLs
+        if: always()
+        run: |
+          if [ -f failed.txt ]; then
+            echo "❌ Failed URLs:"
+            cat failed.txt
+          else
+            echo "✅ All downloads successful"
+          fi
+
+      - name: Summary
+        if: steps.check.outputs.count != '0'
+        run: |
+          echo "## 📦 Download Ready" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Release created successfully." >> $GITHUB_STEP_SUMMARY
