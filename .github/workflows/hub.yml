@@ -37,11 +37,15 @@ jobs:
       - name: Prepare URL List
         run: |
           RAW="${{ github.event.inputs.url }}"
-          
+    
           echo "$RAW" | tr ', ' '\n\n' | tr -s '\n' > urls.txt
           sed -i '/^\s*$/d' urls.txt
 
-          echo "URLs:"
+          # 🔥 محدود کردن به 30 لینک
+          head -n 30 urls.txt > urls_tmp.txt
+          mv urls_tmp.txt urls.txt
+
+          echo "URLs (max 30):"
           cat urls.txt
 
       - name: Download Videos (Parallel + Retry)
