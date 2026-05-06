@@ -1,4 +1,4 @@
-name: Direct URL erome → Release
+name: Direct URL → Release
 on:
   workflow_dispatch:
     inputs:
@@ -7,7 +7,7 @@ on:
         required: true
         type: string
       referer:
-        description: 'Referer header (e.g: https://example.com)'
+        description: 'Referer (e.g: https://www.movie.ir/)'
         required: false
         type: string
         default: ''
@@ -32,9 +32,9 @@ jobs:
             FILENAME=$(basename "$URL" | cut -d'?' -f1)
             echo "📥 Downloading: $URL"
 
-            EXTRA_HEADERS=""
+            REFERER_HEADER=""
             if [ -n "$REFERER" ]; then
-              EXTRA_HEADERS="--header=Referer: $REFERER"
+              REFERER_HEADER="--header=Referer: $REFERER"
             fi
 
             aria2c \
@@ -45,8 +45,12 @@ jobs:
               --dir="upload" \
               --retry-wait=3 \
               --max-tries=5 \
-              --header="User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-              --header="Referer: https://movie.ir" \
+              --header="User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36" \
+              --header="Accept-Encoding: identity;q=1, *;q=0" \
+              --header="sec-ch-ua: \"Google Chrome\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\"" \
+              --header="sec-ch-ua-mobile: ?0" \
+              --header="sec-ch-ua-platform: \"Windows\"" \
+              $REFERER_HEADER \
               "$URL" || echo "❌ Failed: $URL"
           done
 
