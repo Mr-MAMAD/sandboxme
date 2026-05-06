@@ -1,13 +1,13 @@
-name: Direct URL → Release
+name: Page URL → Extract & Download → Release
 on:
   workflow_dispatch:
     inputs:
       urls:
-        description: 'Direct URLs (one per line or comma separated)'
+        description: 'Page URLs (one per line or comma separated)'
         required: true
         type: string
       referer:
-        description: 'Referer (e.g: https://www.movie.ir/)'
+        description: 'Referer (e.g: https://www.example.com/)'
         required: false
         type: string
         default: ''
@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download Files
+      - name: Download Videos
         env:
           RAW_URLS: ${{ github.event.inputs.urls }}
           REFERER: ${{ github.event.inputs.referer }}
@@ -26,31 +26,24 @@ jobs:
         run: |
           mkdir -p upload
 
+          EXTRA_ARGS=""
+          if [ -n "$REFERER" ]; then
+            EXTRA_ARGS="--referer $REFERER"
+          fi
+
           echo "$RAW_URLS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | while read -r URL; do
             [ -z "$URL" ] && continue
+            echo "🔍 Extracting: $URL"
 
-            FILENAME=$(basename "$URL" | cut -d'?' -f1)
-            echo "📥 Downloading: $URL"
-
-            REFERER_HEADER=""
-            if [ -n "$REFERER" ]; then
-              REFERER_HEADER="--header=Referer: $REFERER"
-            fi
-
-            aria2c \
-              --split=16 \
-              --max-connection-per-server=16 \
-              --min-split-size=1M \
-              --out="$FILENAME" \
-              --dir="upload" \
-              --retry-wait=3 \
-              --max-tries=5 \
-              --header="User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36" \
-              --header="Accept-Encoding: identity;q=1, *;q=0" \
-              --header="sec-ch-ua: \"Google Chrome\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\"" \
-              --header="sec-ch-ua-mobile: ?0" \
-              --header="sec-ch-ua-platform: \"Windows\"" \
-              $REFERER_HEADER \
+            yt-dlp \
+              --no-merge \
+              --output "upload/%(title).80B.%(ext)s" \
+              --no-playlist \
+              --retries 5 \
+              --fragment-retries 5 \
+              --concurrent-fragments 4 \
+              --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36" \
+              $EXTRA_ARGS \
               "$URL" || echo "❌ Failed: $URL"
           done
 
@@ -80,7 +73,7 @@ jobs:
           TAG="dl-$(date +%Y%m%d-%H%M%S)"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-          echo "## 📥 Downloaded Files" > body.md
+          echo "## 🎬 Downloaded Videos" > body.md
           echo "" >> body.md
           for FILE in upload/*; do
             [ -f "$FILE" ] || continue
@@ -93,7 +86,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: "📥 ${{ steps.meta.outputs.tag }}"
+          name: "🎬 ${{ steps.meta.outputs.tag }}"
           body_path: body.md
           files: upload/*
         env:
