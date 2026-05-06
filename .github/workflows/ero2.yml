@@ -1,0 +1,88 @@
+name: Multi Direct URL → Release
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: 'Direct URLs (one per line, or comma separated)'
+        required: true
+        type: string
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install aria2
+        run: sudo apt-get install -y aria2
+
+      - name: Download Files
+        env:
+          RAW_URLS: ${{ github.event.inputs.urls }}
+        shell: bash
+        run: |
+          mkdir -p upload
+
+          # Normalize separators → one URL per line
+          echo "$RAW_URLS" | tr ',' '\n' | while read -r URL; do
+            URL=$(echo "$URL" | tr -d '[:space:]')
+            [ -z "$URL" ] && continue
+
+            FILENAME=$(basename "$URL")
+            echo "📥 Downloading: $URL"
+
+            aria2c \
+              --split=16 \
+              --max-connection-per-server=16 \
+              --min-split-size=1M \
+              --out="$FILENAME" \
+              --dir="upload" \
+              --retry-wait=3 \
+              --max-tries=5 \
+              "$URL" || echo "❌ Failed: $URL"
+          done
+
+          echo "✅ All done:"
+          ls -lh upload/
+
+      - name: Split if >2GB
+        shell: bash
+        run: |
+          LIMIT=$((2 * 1024 * 1024 * 1024))
+          for FILE in upload/*; do
+            [ -f "$FILE" ] || continue
+            SIZE=$(stat -c%s "$FILE")
+            BASENAME=$(basename "$FILE")
+            NAME="${BASENAME%.*}"
+            if [ "$SIZE" -gt "$LIMIT" ]; then
+              echo "⚠️ Splitting: $BASENAME"
+              split -b 2G "$FILE" "upload/${NAME}.part"
+              rm "$FILE"
+            fi
+          done
+
+      - name: Generate Release Info
+        id: meta
+        shell: bash
+        run: |
+          TAG="dl-$(date +%Y%m%d-%H%M%S)"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          echo "## 📥 Downloaded Files" > body.md
+          echo "" >> body.md
+          for FILE in upload/*; do
+            [ -f "$FILE" ] || continue
+            NAME=$(basename "$FILE")
+            SIZE=$(du -sh "$FILE" | cut -f1)
+            echo "- \`$NAME\` — **$SIZE**" >> body.md
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "📥 ${{ steps.meta.outputs.tag }}"
+          body_path: body.md
+          files: upload/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
