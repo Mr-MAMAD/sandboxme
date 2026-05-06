@@ -1,0 +1,135 @@
+name: Stream DL → Release
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Page URL (containing video stream)'
+        required: true
+        type: string
+      filename:
+        description: 'Output filename (without extension, optional)'
+        required: false
+        type: string
+        default: ''
+      quality:
+        description: 'Video Quality'
+        required: false
+        type: choice
+        default: 'best'
+        options:
+          - best
+          - 1080p
+          - 720p
+          - 480p
+          - 360p
+
+jobs:
+  stream-download:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg aria2
+          pip install -q yt-dlp
+
+      - name: Download Stream
+        env:
+          PAGE_URL: ${{ github.event.inputs.url }}
+          CUSTOM_NAME: ${{ github.event.inputs.filename }}
+          QUALITY: ${{ github.event.inputs.quality }}
+        shell: bash
+        run: |
+          mkdir -p upload
+
+          # Set quality format
+          case "$QUALITY" in
+            1080p) FORMAT="bestvideo[height<=1080]+bestaudio/best[height<=1080]" ;;
+            720p)  FORMAT="bestvideo[height<=720]+bestaudio/best[height<=720]" ;;
+            480p)  FORMAT="bestvideo[height<=480]+bestaudio/best[height<=480]" ;;
+            360p)  FORMAT="bestvideo[height<=360]+bestaudio/best[height<=360]" ;;
+            *)     FORMAT="bestvideo+bestaudio/best" ;;
+          esac
+
+          # Set output name
+          if [ -n "$CUSTOM_NAME" ]; then
+            OUTPUT="upload/${CUSTOM_NAME}.%(ext)s"
+          else
+            OUTPUT="upload/%(title).80B.%(ext)s"
+          fi
+
+          echo "📥 Downloading from: $PAGE_URL"
+          echo "🎯 Quality: $QUALITY → $FORMAT"
+
+          yt-dlp \
+            --format "$FORMAT" \
+            --merge-output-format mp4 \
+            --output "$OUTPUT" \
+            --no-playlist \
+            --retries 5 \
+            --fragment-retries 5 \
+            --concurrent-fragments 4 \
+            --add-header "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            --no-warnings \
+            --progress \
+            "$PAGE_URL"
+
+          echo "✅ Downloaded files:"
+          ls -lh upload/
+
+      - name: Check file size & split if needed
+        shell: bash
+        run: |
+          LIMIT=$((2 * 1024 * 1024 * 1024)) # 2GB (GitHub release limit)
+
+          for FILE in upload/*; do
+            [ -f "$FILE" ] || continue
+            SIZE=$(stat -c%s "$FILE")
+            BASENAME=$(basename "$FILE")
+            NAME="${BASENAME%.*}"
+            EXT="${BASENAME##*.}"
+
+            if [ "$SIZE" -gt "$LIMIT" ]; then
+              echo "⚠️ File >2GB, splitting: $BASENAME"
+              mkdir -p split_tmp
+              split -b 2G "$FILE" "split_tmp/${NAME}.part"
+              rm "$FILE"
+              mv split_tmp/* upload/
+              rmdir split_tmp
+              echo "📦 Split files:"
+              ls -lh upload/
+            fi
+          done
+
+      - name: Generate Release Info
+        id: meta
+        shell: bash
+        run: |
+          TAG="stream-$(date +%Y%m%d-%H%M%S)"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          echo "## 🎬 Stream Download" > body.md
+          echo "" >> body.md
+          echo "**Source:** \`${{ github.event.inputs.url }}\`" >> body.md
+          echo "**Quality:** ${{ github.event.inputs.quality }}" >> body.md
+          echo "" >> body.md
+          echo "### 📦 Files" >> body.md
+
+          for FILE in upload/*; do
+            [ -f "$FILE" ] || continue
+            NAME=$(basename "$FILE")
+            SIZE=$(du -sh "$FILE" | cut -f1)
+            echo "- \`$NAME\` — **$SIZE**" >> body.md
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "🎬 ${{ steps.meta.outputs.tag }}"
+          body_path: body.md
+          files: upload/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
