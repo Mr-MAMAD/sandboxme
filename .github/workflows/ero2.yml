@@ -1,4 +1,3 @@
-```yaml
 name: Page URL → Extract & Download → Release
 
 on:
@@ -114,4 +113,3 @@ jobs:
           files: upload/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
