@@ -46,7 +46,7 @@ jobs:
               --retry-wait=3 \
               --max-tries=5 \
               --header="User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-              $EXTRA_HEADERS \
+              --header="Referer: https://movie.ir" \
               "$URL" || echo "❌ Failed: $URL"
           done
 
