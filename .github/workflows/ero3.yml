@@ -1,0 +1,107 @@
+name: ero2 → Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Direct URLs (Separate with space, comma, or new line)'
+        required: true
+        type: string
+      password:
+        description: 'ZIP Password (Optional)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  direct-download:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout (minimal)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y aria2 zip
+
+      - name: Download Files
+        shell: bash
+        run: |
+          RAW_URLS="${{ github.event.inputs.url }}"
+          FORMATTED_URLS=$(echo "$RAW_URLS" | tr ',' ' ' | tr '\n' ' ')
+          
+          rm -rf tmp_downloads upload
+          mkdir -p tmp_downloads upload
+          
+          for URL in $FORMATTED_URLS; do
+            [ -z "$URL" ] && continue
+            
+            echo "Downloading: $URL"
+            aria2c \
+              --split=4 \
+              --max-connection-per-server=4 \
+              --dir="tmp_downloads" \
+              --user-agent="Mozilla/5.0" \
+              --referer="https://www.erome.com/" \
+              --auto-file-renaming=true \
+              --max-tries=5 \
+              --retry-wait=5 \
+              "$URL"
+          done
+
+      - name: Prepare Files (zip only if needed)
+        shell: bash
+        run: |
+          PASS="${{ github.event.inputs.password }}"
+          LIMIT=$((2 * 1024 * 1024 * 1024)) # 2GB
+
+          for FILE in tmp_downloads/*; do
+            [ -f "$FILE" ] || continue
+            SIZE=$(stat -c%s "$FILE")
+            BASENAME=$(basename "$FILE")
+            
+            if [ "$SIZE" -gt "$LIMIT" ]; then
+              echo "File >2GB → Splitting: $BASENAME"
+              zip -s 2g "upload/${BASENAME}.zip" -j "$FILE"
+            
+            elif [ -n "$PASS" ]; then
+              echo "Zipping with password: $BASENAME"
+              zip -P "$PASS" "upload/${BASENAME}.zip" -j "$FILE"
+            
+            else
+              echo "Keeping original: $BASENAME"
+              cp "$FILE" "upload/$BASENAME"
+            fi
+          done
+
+          rm -rf tmp_downloads
+
+      - name: Generate Release Info
+        id: meta
+        run: |
+          TAG="run-$(date +%Y%m%d-%H%M%S)"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          echo "## 📦 Download Links" > body.md
+          echo "" >> body.md
+
+          for FILE in upload/*; do
+            NAME=$(basename "$FILE")
+            echo "- $NAME" >> body.md
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "Download ${{ steps.meta.outputs.tag }}"
+          body_path: body.md
+          files: upload/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
