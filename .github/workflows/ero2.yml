@@ -1,11 +1,16 @@
-name: Multi Direct URL → Release
+name: Direct URL erome → Release
 on:
   workflow_dispatch:
     inputs:
       urls:
-        description: 'Direct URLs (one per line, or comma separated)'
+        description: 'Direct URLs (one per line or comma separated)'
         required: true
         type: string
+      referer:
+        description: 'Referer header (e.g: https://example.com)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   download:
@@ -13,23 +18,24 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Install aria2
-        run: sudo apt-get install -y aria2
-
       - name: Download Files
         env:
           RAW_URLS: ${{ github.event.inputs.urls }}
+          REFERER: ${{ github.event.inputs.referer }}
         shell: bash
         run: |
           mkdir -p upload
 
-          # Normalize separators → one URL per line
-          echo "$RAW_URLS" | tr ',' '\n' | while read -r URL; do
-            URL=$(echo "$URL" | tr -d '[:space:]')
+          echo "$RAW_URLS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | while read -r URL; do
             [ -z "$URL" ] && continue
 
-            FILENAME=$(basename "$URL")
+            FILENAME=$(basename "$URL" | cut -d'?' -f1)
             echo "📥 Downloading: $URL"
+
+            EXTRA_HEADERS=""
+            if [ -n "$REFERER" ]; then
+              EXTRA_HEADERS="--header=Referer: $REFERER"
+            fi
 
             aria2c \
               --split=16 \
@@ -39,6 +45,8 @@ jobs:
               --dir="upload" \
               --retry-wait=3 \
               --max-tries=5 \
+              --header="User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+              $EXTRA_HEADERS \
               "$URL" || echo "❌ Failed: $URL"
           done
 
