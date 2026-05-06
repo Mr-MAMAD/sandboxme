@@ -31,7 +31,7 @@ jobs:
 
           echo "📥 Processing URLs..."
 
-          echo "$RAW_URLS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | while read -r URL; do
+          echo "$RAW_URLS" | tr ', ' '\n' | sed '/^$/d' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | while read -r URL; do
             [ -z "$URL" ] && continue
 
             echo "⬇️ Downloading: $URL"
