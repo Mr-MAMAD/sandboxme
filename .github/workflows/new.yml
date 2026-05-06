@@ -31,7 +31,6 @@ jobs:
         shell: bash
         run: |
           set -e
-
           mkdir -p upload
 
           EXTRA_ARGS=""
@@ -40,6 +39,7 @@ jobs:
           fi
 
           echo "📥 Processing URLs..."
+
           echo "$RAW_URLS" | tr ',' '\n' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' | while read -r URL; do
             [ -z "$URL" ] && continue
 
@@ -47,8 +47,10 @@ jobs:
 
             yt-dlp \
               --merge-output-format mp4 \
+              --playlist-items 1 \
               --output "upload/%(title).80B-%(id)s.%(ext)s" \
               --restrict-filenames \
+              --download-archive archive.txt \
               --no-playlist \
               --retries 5 \
               --fragment-retries 5 \
