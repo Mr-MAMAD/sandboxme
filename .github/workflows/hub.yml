@@ -35,13 +35,13 @@ jobs:
           sudo chmod a+rx /usr/local/bin/yt-dlp
 
       - name: Prepare URL List
+        env:
+          INPUT_URL: ${{ github.event.inputs.url }}
         run: |
-          RAW="${{ github.event.inputs.url }}"
-    
-          echo "$RAW" | tr ', ' '\n\n' | tr -s '\n' > urls.txt
-          sed -i '/^\s*$/d' urls.txt
+          # استفاده از environment variable برای جلوگیری از command injection
+          echo "$INPUT_URL" | sed 's/[,[:space:]]\+/\n/g' | grep -v '^$' > urls.txt
 
-          # 🔥 محدود کردن به 30 لینک
+          # محدود کردن به 30 لینک
           head -n 30 urls.txt > urls_tmp.txt
           mv urls_tmp.txt urls.txt
 
@@ -49,42 +49,60 @@ jobs:
           cat urls.txt
 
       - name: Download Videos (Parallel + Retry)
+        env:
+          QUALITY: ${{ github.event.inputs.quality }}
         run: |
-          QUALITY="${{ github.event.inputs.quality }}"
           mkdir -p output
 
+          # تعیین فرمت بر اساس کیفیت
           if [ "$QUALITY" = "720p" ]; then
-            FORMAT="-f bestvideo[height<=720]+bestaudio/best[height<=720]"
+            FORMAT="bestvideo[height<=720]+bestaudio/best[height<=720]"
           elif [ "$QUALITY" = "480p" ]; then
-            FORMAT="-f bestvideo[height<=480]+bestaudio/best[height<=480]"
+            FORMAT="bestvideo[height<=480]+bestaudio/best[height<=480]"
           else
-            FORMAT="-f best"
+            FORMAT="bestvideo+bestaudio/best"
           fi
 
-          export FORMAT
+          # ایجاد اسکریپت دانلود
+          cat > download.sh << 'SCRIPT'
+          #!/bin/bash
+          URL="$1"
+          FORMAT="$2"
+          for i in 1 2 3; do
+            echo "Attempt $i: $URL"
+            yt-dlp -f "$FORMAT" \
+              --merge-output-format mp4 \
+              --no-playlist \
+              --restrict-filenames \
+              -o "output/%(title).100s.%(ext)s" \
+              "$URL" && exit 0
+            sleep 2
+          done
+          echo "$URL" >> failed.txt
+          exit 1
+          SCRIPT
+          chmod +x download.sh
 
-          download() {
-            URL="$1"
-            for i in 1 2 3; do
-              echo "Attempt $i: $URL"
-              yt-dlp $FORMAT \
-                --merge-output-format mp4 \
-                -o "output/%(title)s.%(ext)s" \
-                "$URL" && return 0
-              sleep 2
+          # اجرای موازی دانلودها
+          while IFS= read -r url || [ -n "$url" ]; do
+            [ -z "$url" ] && continue
+            ./download.sh "$url" "$FORMAT" &
+            
+            # محدود کردن به 3 دانلود همزمان
+            while [ "$(jobs -r | wc -l)" -ge 3 ]; do
+              sleep 1
             done
-            echo "$URL" >> failed.txt
-          }
+          done < urls.txt
 
-          export -f download
-
-          cat urls.txt | xargs -P 3 -I {} bash -c 'download "$@"' _ {}
+          # منتظر ماندن برای تمام دانلودها
+          wait
 
       - name: Check output
         id: check
         run: |
-          COUNT=$(ls -1 output 2>/dev/null | wc -l)
+          COUNT=$(find output -type f -name "*.mp4" 2>/dev/null | wc -l)
           echo "count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Found $COUNT video(s)"
 
       - name: Generate Tag
         if: steps.check.outputs.count != '0'
